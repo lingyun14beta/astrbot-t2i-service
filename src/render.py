@@ -217,9 +217,29 @@ class Text2ImgRender:
             logger.info(f"html2pic: set viewport width to {viewport_width}")
 
         try:
-            await page.goto(
-                f"file://{html_file_path}", timeout=screenshot_options.timeout
+            # 读取 HTML 内容，用 set_content() 加载而非 file:// 协议
+            # file:// 协议下 Chromium 会因跨域策略阻断 CDN 脚本（marked.js 等），
+            # 导致 JS 不执行，#content 永远为空。
+            with open(html_file_path, "r", encoding="utf-8") as f:
+                html_content = f.read()
+
+            await page.set_content(
+                html_content,
+                wait_until="networkidle",
             )
+
+            # 等待 JS 渲染 Markdown 完成（marked.js 异步执行）
+            try:
+                content_el = await page.query_selector("#content")
+                if content_el is not None:
+                    await page.wait_for_selector(
+                        "#content:not(:empty)", timeout=10000
+                    )
+                    # 额外等待 500ms，确保 marked.js 完整渲染所有内容
+                    await page.wait_for_timeout(500)
+            except Exception as e:
+                logger.debug(f"html2pic: wait_for_selector skipped: {e}")
+
             screenshot_kwargs = screenshot_options.model_dump(exclude_none=True)
             screenshot_kwargs.pop("viewport_width", None)
             screenshot_kwargs.pop("device_scale_factor_level", None)
